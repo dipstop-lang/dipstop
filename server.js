@@ -24,8 +24,13 @@ const allowedOrigins = (process.env.ALLOWED_ORIGINS || "http://localhost:5173")
 
 app.use(cors({
   origin: (origin, cb) => {
-    if (!origin || allowedOrigins.includes(origin)) cb(null, true);
-    else cb(new Error("CORS blocked"));
+    // Allow requests with no origin (mobile apps, curl, etc.)
+    if (!origin) return cb(null, true);
+    // Allow all if wildcard is set
+    if (allowedOrigins.includes("*")) return cb(null, true);
+    // Check against whitelist
+    if (allowedOrigins.includes(origin)) return cb(null, true);
+    cb(new Error("CORS blocked"));
   },
   credentials: true,
 }));
