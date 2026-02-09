@@ -128,7 +128,7 @@ app.get("/api/health", (req, res) => {
     status: "ok",
     version: "1.0.0",
     serpapi: !!SERPAPI_KEY,
-    shopify: !!process.env.SHOPIFY_ACCESS_TOKEN,
+    shopify: !!(process.env.SHOPIFY_CLIENT_ID && process.env.SHOPIFY_CLIENT_SECRET),
   });
 });
 
@@ -144,27 +144,31 @@ app.post("/api/auth/login", async (req, res) => {
 
     if (!membership.valid) {
       const messages = {
-        "not-found": "No account found. Purchase FlyRight access at dipstopmarket.com",
-        "no-membership": "Your account doesn't have an active FlyRight membership. Purchase at dipstopmarket.com",
-        "expired": "Your FlyRight membership has expired. Renew at dipstopmarket.com",
+        "not-found": "No account found. Purchase access at dipstopmarket.com",
+        "no-membership": "Your account doesn't have an active membership. Purchase at dipstopmarket.com",
+        "expired": "Your membership has expired. Renew at dipstopmarket.com",
         "shopify-error": "Unable to verify membership. Please try again.",
         "error": "Unable to verify membership. Please try again.",
       };
       return res.status(403).json({
         error: messages[membership.reason] || "Membership not active",
         reason: membership.reason,
-        purchaseUrl: "https://dipstopmarket.com/products/flyright-annual-access",
+        purchaseUrls: {
+          monthly: "https://dipstopmarket.com/products/dipstop-cost-constructor-30-day",
+          annual: "https://dipstopmarket.com/products/dipstop-cost-constructor-annual",
+        },
       });
     }
 
     // Issue token (24 hour expiry)
-    const token = createToken(email.trim().toLowerCase(), 86400);
+    const token = createToken(email.trim().toLowerCase(), membership.tier || "unknown", 86400);
 
     logUsage(email, "login");
 
     res.json({
       token,
       user: membership.customer || { email },
+      tier: membership.tier || "unknown",
       expiresIn: 86400,
     });
 
@@ -326,7 +330,7 @@ app.listen(PORT, () => {
   ║──────────────────────────────────────────║
   ║  API:      http://localhost:${PORT}          ║
   ║  SerpApi:  ${SERPAPI_KEY ? "✓ configured" : "✗ missing key"}               ║
-  ║  Shopify:  ${process.env.SHOPIFY_ACCESS_TOKEN ? "✓ configured" : "✗ missing (dev mode)"}               ║
+  ║  Shopify:  ${process.env.SHOPIFY_CLIENT_ID ? "✓ configured" : "✗ missing (dev mode)"}               ║
   ╚══════════════════════════════════════════╝
   `);
 

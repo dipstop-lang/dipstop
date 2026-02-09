@@ -8,10 +8,10 @@
 ┌──────────────────────────────────────────────────────────┐
 │  dipstopmarket.com (Shopify)                             │
 │  ┌─────────────────────┐  ┌───────────────────────────┐  │
-│  │ Embassy polos, mugs  │  │ FlyRight Annual Access    │  │
-│  │ Great seal gear      │  │ $49.99/year               │  │
-│  │ Laser-engraved items │  │ → tags customer           │  │
-│  └─────────────────────┘  │   "flyright-member"        │  │
+│  │ Embassy polos, mugs  │  │ Cost Constructor Access   │  │
+│  │ Great seal gear      │  │ $9.99/30 days             │  │
+│  │ Laser-engraved items │  │ $49.99/year               │  │
+│  └─────────────────────┘  │ → tags customer on order   │  │
 │                            └───────────────────────────┘  │
 └──────────────────────────────────────────────────────────┘
           │ Purchase triggers Shopify Flow
@@ -57,46 +57,32 @@ npm run monitor      # One-off fare scan
 
 ## Shopify Setup (dipstopmarket.com)
 
-### Step 1: Create the FlyRight Product
+### Products
 
-In Shopify Admin → Products → Add product:
-- **Title:** FlyRight Annual Access — Fly America Flight Search
-- **Price:** $49.99
-- **Type:** Digital product (uncheck "This is a physical product")
-- **Description:** Something like:
-  > Annual access to FlyRight, the Fly America Act compliant flight search engine.
-  > Search international business class fares, find compliant routings, and receive
-  > weekly deal alerts — all optimized for US government travelers.
-  > Saves 10-20 hours of fare research per trip.
-- **Tags:** flyright, digital, membership
+Create TWO products on dipstopmarket.com:
+- **Dipstop Cost Constructor — 30-Day Access** ($9.99)
+- **Dipstop Cost Constructor — Annual Access** ($49.99)
 
-### Step 2: Create the Shopify Flow
+### Shopify Flows
 
-Shopify Admin → Apps → Shopify Flow → Create workflow:
+Create TWO Flows (one per product) that:
+1. Trigger on order created
+2. Check line item title for "30-Day" or "Annual"
+3. Add customer tags: `flyright-member-monthly` or `flyright-member-annual`
+4. Add expiry tag: `flyright-expires:YYYY-MM-DD`
 
-**Trigger:** Order created
-**Condition:** Order line items → product title contains "FlyRight"
-**Action 1:** Add customer tag → `flyright-member`
-**Action 2:** Add customer tag → `flyright-expires:{{order.created_at | date: "%Y" | plus: 1}}-{{order.created_at | date: "%m-%d"}}`
+### Dev Dashboard App (NOT legacy custom apps)
 
-This tags the customer immediately on purchase and sets an expiry date 1 year out.
+Legacy custom apps can no longer be created as of January 1, 2026.
 
-### Step 3: Create a Custom App
+1. Go to Shopify admin → Settings → Apps → **Build apps in Dev Dashboard**
+2. Create app in Dev Dashboard with scopes: `read_customers`, `read_orders`
+3. Release a version → Install on your store
+4. Copy **Client ID** and **Client Secret** from app Settings
+5. Store as `SHOPIFY_CLIENT_ID` and `SHOPIFY_CLIENT_SECRET` in your environment
 
-Shopify Admin → Settings → Apps and sales channels → Develop apps:
-
-1. Click "Create an app" → name it "FlyRight Backend"
-2. Configure API scopes:
-   - `read_customers` (to verify membership)
-   - `read_orders` (optional, for analytics)
-3. Install the app → copy the Admin API access token
-4. Put the token in your `.env` as `SHOPIFY_ACCESS_TOKEN`
-
-### Step 4: Auto-Renewal (Optional)
-
-For auto-renewal, you have two options:
-- **Simple:** Rely on customers repurchasing annually (send renewal reminder emails)
-- **Subscription:** Use a Shopify subscription app (like "Seal Subscriptions" or "Recharge") to make FlyRight a recurring $49.99/year subscription
+The backend uses the OAuth client credentials grant to request access tokens
+automatically. Tokens expire every 24 hours and are refreshed transparently.
 
 ## API Endpoints
 
