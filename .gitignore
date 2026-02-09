@@ -1,0 +1,6 @@
+node_modules/
+.env
+price-history.json
+usage-log.json
+latest-deals.json
+.DS_Store
