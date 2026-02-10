@@ -85,7 +85,14 @@ const US_AIRPORTS = new Set([
   "PIT","CMH","SAT","ABQ","SJC","RSW","TUS","OGG","PBI","RIC",
   "CVG","BDL","JAX","OMA","BUF","BUR","ONT","PVD","ORF","GRR",
   "TUL","OKC","ALB","LIT","SDF","MSY","MEM","RNO","ELP","BOI",
-  "ANC","GSO","DSM","ROC","TYS","CHS","SYR","SAV","FNT",
+  "ANC","GSO","DSM","ROC","TYS","CHS","SYR","SAV","FNT","MDW",
+  "KOA","LIH","FAI","JNU","HLN","BIL","MSO","GTF","BZN","FCA",
+  "GSP","BHM","HSV","JAN","ICT","LEX","PWM","BTV","MHT","GEG",
+  "SBN","GNV","TLH","PNS","DAB","SRQ","CHA","GSO","ILM","MYR",
+  "CAE","AGS","SHV","BTR","MOB","MGM","SGF","XNA","DAY","CAK",
+  "MDT","ABE","AVL","FNT","TVC","CID","MLI","PIA","SPI","EVV",
+  "FWA","CRW","SJU","STT","STX","GUM","LBB","MAF","AMA","COS",
+  "RAP","FSD","FAR","BIS","LAN","MSN","FCA","GRR","PIT",
 ]);
 
 // CA/MX gateway airports
@@ -98,7 +105,7 @@ const GATEWAY_AIRPORTS = new Set([
 // MAIN ADAPTER: Convert SerpApi response → FlyRight results[]
 // ============================================================
 function adaptSerpApiResponse(serpData, options = {}) {
-  const { creativeBusinessClass = false, searchDate = "" } = options;
+  const { creativeBusinessClass = false, searchDate = "", requestedCabin = "Y" } = options;
   const results = [];
 
   // SerpApi returns "best_flights" and "other_flights" arrays
@@ -141,8 +148,8 @@ function adaptSerpApiResponse(serpData, options = {}) {
         }
       }
 
-      // Cabin class
-      const cabin = CABIN_MAP[f.travel_class] || "Y";
+      // Cabin class — use SerpApi's travel_class if provided, else fall back to what we searched for
+      const cabin = f.travel_class ? (CABIN_MAP[f.travel_class] || requestedCabin) : requestedCabin;
 
       // Per-segment price: SerpApi only gives total price per itinerary,
       // not per segment. We estimate proportionally by duration.
@@ -300,6 +307,12 @@ async function searchFlights(apiKey, params) {
 // ============================================================
 // HIGH-LEVEL: Search a single leg with flex dates
 // Returns FlyRight-compatible results[]
+//
+// QUERY BUDGET (to control SerpApi costs):
+//   flex=0: 1 main + (CBC? 2 gateways × 2) = max 5 queries
+//   flex=1: 3 main + (CBC? 3 dates × 2 gateways × 2) = max 15 queries
+//   flex=2: 5 main + (CBC? 5 dates × 2 gateways × 2) = max 25 queries
+//   flex=3: 7 main + (CBC? 3 center dates × 2 gateways × 2) = max 19 queries
 // ============================================================
 async function searchLeg(apiKey, {
   dep, arr, date, flex = 0,
@@ -308,6 +321,7 @@ async function searchLeg(apiKey, {
   // Map FlyRight cabin codes to SerpApi travel_class numbers
   const cabinNum = { Y: 1, W: 2, C: 3, F: 4 }[cabin] || 1;
   const allResults = [];
+  let queryCount = 0;
 
   // Generate flex date range
   const baseDate = new Date(date);
@@ -318,88 +332,30 @@ async function searchLeg(apiKey, {
     dates.push(d.toISOString().split("T")[0]);
   }
 
-  // Search each date (batch to avoid rate limits)
+  // SerpApi stops parameter: 0=any, 1=nonstop only, 2=up to 1 stop, 3=up to 2 stops
+  // We enforce max 1 stop (value 2) to keep results practical
+  const maxStops = 2;
+
+  // Search each date
   for (const searchDate of dates) {
     try {
-      // Main search in requested cabin
       const serpData = await searchFlights(apiKey, {
         depAirport: dep,
         arrAirport: arr,
         date: searchDate,
         cabin: cabinNum,
+        stops: maxStops,
       });
+      queryCount++;
 
       const results = adaptSerpApiResponse(serpData, {
         creativeBusinessClass,
         searchDate,
+        requestedCabin: cabin, // Pass so we can force cabin if SerpApi omits it
       });
       allResults.push(...results);
 
-      // Creative Business Class: also search via gateway cities
-      if (creativeBusinessClass) {
-        // For gateway routing, SerpApi naturally returns connecting flights
-        // through various cities. We detect gateways in the results.
-        // But we can also do explicit searches via known gateways:
-        const gateways = ["YYZ", "YUL", "YVR", "MEX", "CUN"];
-        for (const gw of gateways) {
-          if (gw === dep || gw === arr) continue;
-          try {
-            // Search dep → gateway in business
-            const gwData = await searchFlights(apiKey, {
-              depAirport: dep,
-              arrAirport: gw,
-              date: searchDate,
-              cabin: 3, // Business
-            });
-            // Search gateway → arr in economy  
-            const finalData = await searchFlights(apiKey, {
-              depAirport: gw,
-              arrAirport: arr,
-              date: searchDate,
-              cabin: 1, // Economy
-            });
-
-            // Combine: take cheapest of each and merge
-            const gwResults = adaptSerpApiResponse(gwData, { searchDate });
-            const finalResults = adaptSerpApiResponse(finalData, { searchDate });
-
-            if (gwResults.length > 0 && finalResults.length > 0) {
-              // Create combined itineraries (top 3 of each)
-              const topGw = gwResults.slice(0, 3);
-              const topFinal = finalResults.slice(0, 3);
-
-              for (const gRes of topGw) {
-                for (const fRes of topFinal) {
-                  const combinedSegs = [...gRes.segments, ...fRes.segments];
-                  const combinedPrice = gRes.totalPrice + fRes.totalPrice;
-                  const combinedMin = gRes.totalMin + fRes.totalMin;
-                  const route = [combinedSegs[0].dep, ...combinedSegs.map(s => s.arr)];
-
-                  allResults.push({
-                    id: `gw-${searchDate}-${gw}-${Math.random().toString(36).substr(2,6)}`,
-                    segments: combinedSegs,
-                    totalPrice: combinedPrice,
-                    date: searchDate,
-                    cabin: "C", // Primary cabin
-                    stops: combinedSegs.length - 1,
-                    routeDesc: route.join(" → "),
-                    isGateway: true,
-                    gatewayCode: gw,
-                    isMixedCabin: true,
-                    compliance: checkCompliance(combinedSegs),
-                    totalMin: combinedMin,
-                  });
-                }
-              }
-            }
-          } catch (gwErr) {
-            // Skip failed gateway searches silently
-            console.warn(`Gateway ${gw} search failed:`, gwErr.message);
-          }
-        }
-      }
-
-      // Small delay between searches to respect rate limits
+      // Small delay between searches
       await new Promise(r => setTimeout(r, 200));
 
     } catch (err) {
@@ -407,7 +363,90 @@ async function searchLeg(apiKey, {
     }
   }
 
-  // Deduplicate by route+carrier+price (SerpApi may return dupes across dates)
+  // Creative Business Class: search via top 2 gateways only
+  // Only search center date + ±1 day (max 3 dates) to limit queries
+  if (creativeBusinessClass) {
+    const gateways = pickBestGateways(dep, arr, 2);
+    const cbcDates = dates.length <= 3 ? dates : [
+      dates[Math.max(0, Math.floor(dates.length/2) - 1)],
+      dates[Math.floor(dates.length/2)],
+      dates[Math.min(dates.length - 1, Math.floor(dates.length/2) + 1)],
+    ];
+
+    for (const searchDate of cbcDates) {
+      for (const gw of gateways) {
+        try {
+          // Search dep → gateway in business (max 1 stop)
+          const gwData = await searchFlights(apiKey, {
+            depAirport: dep,
+            arrAirport: gw,
+            date: searchDate,
+            cabin: 3,
+            stops: maxStops,
+          });
+          queryCount++;
+
+          // Search gateway → arr in economy (max 1 stop)
+          const finalData = await searchFlights(apiKey, {
+            depAirport: gw,
+            arrAirport: arr,
+            date: searchDate,
+            cabin: 1,
+            stops: maxStops,
+          });
+          queryCount++;
+
+          // Combine: take top 2 of each to limit combinations
+          const gwResults = adaptSerpApiResponse(gwData, {
+            searchDate,
+            requestedCabin: "C",
+          });
+          const finalResults = adaptSerpApiResponse(finalData, {
+            searchDate,
+            requestedCabin: "Y",
+          });
+
+          if (gwResults.length > 0 && finalResults.length > 0) {
+            const topGw = gwResults.slice(0, 2);
+            const topFinal = finalResults.slice(0, 2);
+
+            for (const gRes of topGw) {
+              for (const fRes of topFinal) {
+                const combinedSegs = [...gRes.segments, ...fRes.segments];
+                const combinedPrice = gRes.totalPrice + fRes.totalPrice;
+                const combinedMin = gRes.totalMin + fRes.totalMin;
+                const route = [combinedSegs[0].dep, ...combinedSegs.map(s => s.arr)];
+
+                allResults.push({
+                  id: `gw-${searchDate}-${gw}-${Math.random().toString(36).substr(2,6)}`,
+                  segments: combinedSegs,
+                  totalPrice: combinedPrice,
+                  date: searchDate,
+                  cabin: "C",
+                  stops: combinedSegs.length - 1,
+                  routeDesc: route.join(" → "),
+                  isGateway: true,
+                  gatewayCode: gw,
+                  isMixedCabin: true,
+                  compliance: checkCompliance(combinedSegs),
+                  totalMin: combinedMin,
+                });
+              }
+            }
+          }
+
+          await new Promise(r => setTimeout(r, 200));
+
+        } catch (gwErr) {
+          console.warn(`Gateway ${gw} search failed:`, gwErr.message);
+        }
+      }
+    }
+  }
+
+  console.log(`searchLeg ${dep}→${arr}: ${queryCount} SerpApi queries, ${allResults.length} results`);
+
+  // Deduplicate by route+carrier+price
   const seen = new Set();
   const deduped = allResults.filter(r => {
     const key = `${r.routeDesc}-${r.segments.map(s=>s.flt).join(",")}-${r.totalPrice}`;
@@ -416,10 +455,23 @@ async function searchLeg(apiKey, {
     return true;
   });
 
-  // Sort by price
   deduped.sort((a, b) => a.totalPrice - b.totalPrice);
+  return { results: deduped, queryCount };
+}
 
-  return deduped;
+// Pick the best N gateway airports based on origin/destination geography
+function pickBestGateways(dep, arr, count = 2) {
+  // All gateways ranked by general utility
+  const allGateways = ["YYZ", "YUL", "YVR", "MEX", "CUN"];
+
+  // Filter out origin/destination
+  const available = allGateways.filter(gw => gw !== dep && gw !== arr);
+
+  // Simple geographic preference:
+  // West Coast origin? Prefer YVR, MEX
+  // East Coast origin? Prefer YYZ, YUL
+  // Otherwise: YYZ + MEX as most connected
+  return available.slice(0, count);
 }
 
 module.exports = {

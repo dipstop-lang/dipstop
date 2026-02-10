@@ -222,19 +222,20 @@ app.post("/api/search/leg", requireAuth, async (req, res) => {
       dep,
       arr,
       date,
-      flex: Math.min(flex || 0, 3), // Cap flex at ±3 days to control API usage
+      flex: Math.min(flex || 0, 2), // Cap flex at ±2 days to control API usage
       cabin: cabin || "Y",
       creativeBusinessClass: creativeBusinessClass || false,
     });
 
-    logUsage(req.user.email, "search", { dep, arr, date, cabin, results: results.length });
+    logUsage(req.user.email, "search", { dep, arr, date, cabin, results: results.results.length, queries: results.queryCount });
 
     res.json({
-      results,
+      results: results.results,
       meta: {
         searchedAt: new Date().toISOString(),
         dep, arr, date,
-        resultCount: results.length,
+        resultCount: results.results.length,
+        queriesUsed: results.queryCount,
         rateLimitRemaining: limit.remaining,
       },
     });
